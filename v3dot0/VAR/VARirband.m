@@ -54,8 +54,6 @@ ENDO    = VAR.ENDO;
 EXOG    = VAR.EXOG;
 IV      = VAR.IV;
 
-INF = zeros(nsteps,nvar,nvar);
-SUP = zeros(nsteps,nvar,nvar);
 MED = zeros(nsteps,nvar,nvar);
 BAR = zeros(nsteps,nvar,nvar);
 
@@ -171,10 +169,18 @@ disp('-- Done!');
 disp(' ');
 
 %% Compute the error bands
-%------------------------------------------------------------------------ 
-pctg_inf = (100-pctg)/2; 
-pctg_sup = 100 - (100-pctg)/2;
-INF(:,:,:) = prctile(IR(:,:,:,:),pctg_inf,4);
-SUP(:,:,:) = prctile(IR(:,:,:,:),pctg_sup,4);
+%------------------------------------------------------------------------
+npctg = numel(pctg);
+if npctg > 1
+    INF = zeros(nsteps, nvar, nvar, npctg);
+    SUP = zeros(nsteps, nvar, nvar, npctg);
+    for pp = 1:npctg
+        INF(:,:,:,pp) = prctile(IR(:,:,:,:), (100-pctg(pp))/2, 4);
+        SUP(:,:,:,pp) = prctile(IR(:,:,:,:), 100-(100-pctg(pp))/2, 4);
+    end
+else
+    INF = prctile(IR(:,:,:,:), (100-pctg)/2, 4);
+    SUP = prctile(IR(:,:,:,:), 100-(100-pctg)/2, 4);
+end
 MED(:,:,:) = prctile(IR(:,:,:,:),50,4);
 BAR(:,:,:) = mean(IR(:,:,:,:),4);

@@ -21,14 +21,14 @@ VARopt.ident     = 'short'; % identification method for IRFs ('short' zero short
 VARopt.recurs    = 'wold';  % method for computation of recursive stuff ('wold' form MA representation, 'comp' for companion form)
 VARopt.ndraws    = 1000;    % number of draws for bootstrap or sign restrictions
 VARopt.mult      = 10;      % multiple of draws to be printed at screen.
-VARopt.pctg      = 95;      % confidence level for bootstrap
+VARopt.pctg      = [70, 90]; % confidence level(s) for bootstrap (scalar or vector, e.g. [70 90])
 VARopt.method    = 'bs';    % methodology for error bands, 'bs' for standard bootstrap, 'wild' wild bootstrap
 VARopt.sr_hor    = 1;       % number of periods that sign restrcitions are imposed on
 VARopt.sr_rot    = 500;     % max number of rotations for finding sign restrictions
 VARopt.sr_draw   = 100000;  % max number of total draws for finding sign restrictions
 VARopt.sr_mod    = 1;       % model uncertainty for sign restrictions (1=yes, 0=no)
 VARopt.pick      = 0;       % selects one variable for IRFs and FEVDs plots (0 => plot all)
-VARopt.quality   = 1;       % quality of exported figures: 1=high (ghostscript required), 0=low
+VARopt.quality   = 2;       % quality of exported figures: 2=exportgraphics PDF (default), 1=high (ghostscript required), 0=low
 VARopt.suptitle  = 0;       % title on top of figures
 VARopt.datesnum  = [];      % numeric vector of dates in the VAR
 VARopt.datestxt  = [];      % cell vector of dates in the VAR
