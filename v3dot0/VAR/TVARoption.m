@@ -1,45 +1,52 @@
 function TVARopt = TVARoption
 %==========================================================================
-% Default options for Threshold VAR (TVAR) analysis. Inherits all fields
-% from VARoption and appends TVAR-specific settings.
+% Default options for Threshold VAR (TVAR) analysis. This function is
+% called automatically by TVARmodel. Users can override any field after
+% calling it.
 %==========================================================================
 % TVARopt = TVARoption
-%==========================================================================
-% VAR Toolbox 3.0 - TVAR Extension
-%==========================================================================
+% =========================================================================
+% VAR Toolbox 3.0 — TVAR Extension
+% Ambrogio Cesa-Bianchi
+% -------------------------------------------------------------------------
 
-% Inherit all standard VAR options
+%% Inherit all standard VAR options
+% -------------------------------------------------------------------------
 TVARopt = VARoption;
 
-% -------------------------------------------------------------------
-% Threshold variable
-% -------------------------------------------------------------------
-TVARopt.thrvar_idx = 1;       % Column index of threshold variable in ENDO.
-                               % Set to 0 when using an external threshold
-                               % variable (passed as THRVAR_EX to TVARmodel).
+%% TVAR estimation method
+% -------------------------------------------------------------------------
+TVARopt.tvar_method  = 'freq';   % 'freq' (Hansen grid search + OLS) or 'bayes' (Gibbs sampler)
 
-TVARopt.delay      = 1;       % Delay d: threshold variable at time t is
-                               % q_{t-d}. Must satisfy 1 <= delay <= nlag.
+%% Threshold specification
+% -------------------------------------------------------------------------
+TVARopt.thrvar_idx   = 1;        % column index of threshold variable in ENDO (0 = external)
+TVARopt.delay        = 1;        % delay d for threshold variable: q_{t-d}
+TVARopt.tartransform = 0;        % transformation of threshold variable: 0=level, 1=annual growth (4-period diff)
 
-% -------------------------------------------------------------------
-% Threshold search
-% -------------------------------------------------------------------
-TVARopt.nthresh    = 1;       % Number of thresholds (only 1 supported).
-                               % Two regimes: q_{t-d} <= thresh (regime 1)
-                               % and q_{t-d} > thresh (regime 2).
+%% Frequentist options (method='freq')
+% -------------------------------------------------------------------------
+TVARopt.trim         = 0.15;     % trimming fraction: exclude bottom/top quantiles from grid search
+TVARopt.ngrid        = 300;      % number of grid points for threshold search
 
-TVARopt.trim       = 0.15;    % Fraction of obs trimmed from each tail of
-                               % the threshold variable when defining the
-                               % grid. Ensures each regime has enough obs.
-                               % Default 0.15 follows Hansen (1999).
+%% Bayesian options (method='bayes')
+% -------------------------------------------------------------------------
+TVARopt.nreps        = 20000;    % total Gibbs sampler replications
+TVARopt.nburn        = 5000;     % burn-in period
+TVARopt.nskip        = 5;        % thinning: save every nskip-th draw
+TVARopt.lambdaP      = 0.2;      % Minnesota prior: tightness on first lag coefficients
+TVARopt.tauP         = 2.0;      % Minnesota prior: tightness on sum-of-coefficients
+TVARopt.epsilonP     = 0.001;    % Minnesota prior: tightness on constant
+TVARopt.tarvariance  = 10;       % prior variance on threshold value (mean = sample mean of Ystar)
+TVARopt.tarscale     = 0.001;    % random walk MH proposal variance for threshold
+TVARopt.maxtrys      = 1000;     % max draws to find a stable coefficient vector
 
-TVARopt.ngrid      = 300;     % Number of equally-spaced grid points
-                               % searched for the threshold value.
+%% GIRF options (Generalized Impulse Response Functions)
+% -------------------------------------------------------------------------
+TVARopt.nreps_girf     = 50;       % number of simulation repetitions per starting point
+TVARopt.shock_scale    = 1;        % shock size in standard deviations
 
-% -------------------------------------------------------------------
-% Display / plotting
-% -------------------------------------------------------------------
-TVARopt.rnames     = {'Regime 1', 'Regime 2'};
-                               % Regime labels used in TVARprint and
-                               % TVARirplot. Override with meaningful names,
-                               % e.g. {'Recession', 'Expansion'}.
+%% Plotting options
+% -------------------------------------------------------------------------
+TVARopt.tvar_plot_mode = 'overlay'; % 'overlay' (both regimes on one figure) or 'separate' (one figure per regime)
+TVARopt.regime_names   = {'Regime 1', 'Regime 2'}; % labels for the two regimes

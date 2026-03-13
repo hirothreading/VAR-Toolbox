@@ -1,0 +1,47 @@
+function pvalues = get_AG_pvalues(arrInput, horizons)
+% get_AG_pvalues :
+% calculates pvalues for the Amisano-Giacomini test of the null of equal 
+% predictive ability. 
+% 
+% INPUTS        - arrInput: T*N*H array of differences in forecast accuracy
+%                   i.e. [L(model 1) - L(model 2)] where L is some loss
+%                   function. The dimensions are
+%                   (#periods)(#variables)(#horizons)
+% 
+%               - horizons: 1*H vector of horizons 
+% 
+% OUTPUT        - pvalues: H*N matrix of pvalues.
+% 
+% NOTE: key fer is Amisano-Giacomini, Comapring density forecasts via
+% weighted likelihood ratio tests, JBES (2007). The #lags for the
+% newey-west HAC is set to (forecast horizon - 1); that gives 0 for 
+% 1-step ahead forecasts, as suggested in AG p.180.
+%
+% PA, 29 Jan 13.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Get dimensions:
+[T N H] = size(arrInput);
+
+pvalues = NaN(H, N);
+
+% Loop over horizons and variables:
+for hh = 1:H
+    for ii = 1:N
+        
+        lossdiff = squeeze(arrInput(:, ii, hh));
+        
+        sigma = NeweyWest_matrix(lossdiff, horizons(hh)-1);
+        
+        teststat = (1/T)*sum(lossdiff) / (sigma/sqrt(T));
+        
+        pval = 2*(1 - cdf('norm', abs(teststat), 0, 1));
+        
+        pval = roundn(pval, -3);
+        
+        pvalues(hh, ii) = pval;
+        
+    end
+end
+
+end

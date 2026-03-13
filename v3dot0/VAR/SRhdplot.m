@@ -68,7 +68,7 @@ for ii=pick:nvars
     title([vnames{ii}], 'FontWeight','bold','FontSize',10); 
     % Save
     FigName = [filename num2str(ii)];
-    if quality 
+    if quality
         if suptitle==1
             Alphabet = char('a'+(1:nvars)-1);
             SupTitle([Alphabet(jj) ') HD of '  vnames{ii}])
@@ -76,7 +76,7 @@ for ii=pick:nvars
         opt = LegOption; opt.handle = [H(1,:) h];
         LegSubplot([snames {'Data'}],opt);
         set(gcf, 'Color', 'w');
-        export_fig(FigName,'-pdf','-painters')
+        exportgraphics(gcf,[FigName '.pdf'],'ContentType','vector')
     else
         legend([H(1,:) h],[vnames {'Data'}])
         print('-dpdf','-r100',FigName);

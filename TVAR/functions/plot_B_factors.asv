@@ -1,0 +1,95 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Marginal likelihoods and Bayes factors against data
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Pick horizon (in terms of months):
+hh = 12;
+
+% NOTHING TO BE CHANGED FROM HERE ON.
+
+% Get position of the horizon in the results data
+hhp = find(horizons==hh);
+if isempty(hhp)
+    error('There is no such horizon')
+end
+
+% Tickmarks for dates:
+datesind = 2:48:342;
+
+% Define data and un-do IP and CPI transformation (see arrangedata):
+tempData1   = datavar;
+tempData1   = tempData1 ./ repmat([12 1 12 1], T,1);
+
+% Get cumulative data
+tempData2 = tempData1;
+for tt = T0+hh:size(tempData1, 1) 
+    tempData2(tt, [1 3])  = sum(tempData1(tt-hh+1:tt, [1 3]), 1);
+end
+
+%% 4*4 plot, one for each variables
+figure('Name', 'B factors, all vars', 'Number','off')
+
+for vv = 1:4
+
+    % Get marginal likelihoods: ML(t) = SUM_t(LS(t), Geweke-Amisano equ. (8)
+    ml1 = []; ml2 = []; ml3 = [];
+    for tt = 1:T-T0-max(horizons)+1
+        ml1 = [ml1 ; sum(TVTP.ls(1:tt,vv,hhp)) ];
+        ml2 = [ml2 ; sum(VAR.ls(1:tt,vv,hhp)) ];
+        ml3 = [ml3 ; sum(TAR.ls(1:tt,vv,hhp)) ];   
+    end
+
+    % Get log Bayes factors (Geweke-Amisano eq. 9):
+    bf21 = ml2 - ml1;
+    bf32 = ml3 - ml2;
+    bf31 = ml3 - ml1;   
+           
+    subplot(2, 2, vv)
+    hold on 
+    plot(datesn2, bf21, 'b', 'LineWidth', 2)
+    plot(datesn2, bf32, 'r', 'LineWidth', 2)
+    plot(datesn2, bf31, 'k--', 'LineWidth', 2)
+    hline(0, 'k')
+    hold off
+    
+    xlim ([min(datesn2(datesind)) max(datesn2(datesind))])
+    set(gca, 'XTick', datesn2(datesind));
+    set(gca, 'XTickLabel', datestr(datesn2(datesind), 'mm/yy'));
+    title(vnamesvar(vv))
+
+end
+% legend('VAR/VAR^§', 'TAR/VAR', 'TAR/VAR^§', 'Location', 'NorthWest'), legend BOXON
+% legend('VAR/MSVAR', 'TAR/VAR', 'TAR/MSVAR', 'Location', 'NorthWest'), legend BOXON
+legend('VAR/VAR^§', 'TAR/VAR', 'TAR/VAR^§', 'Location', 'NorthWest'), legend BOXON
+
+%% joint (y,pi) predictions
+figure('Name', 'B factors, joint (y,pi)', 'Number','off')
+
+% Get marginal likelihoods: ML(t) = SUM_t(LS(t), Geweke-Amisano equ. (8)
+ml1 = []; ml2 = []; ml3 = [];
+for tt = 1:T-T0-max(horizons)+1
+    ml1 = [ml1 ; sum(TVTP.jls(1:tt,hhp)) ];
+    ml2 = [ml2 ; sum(VAR.jls(1:tt,hhp)) ];
+    ml3 = [ml3 ; sum(TAR.jls(1:tt,hhp)) ];   
+end
+
+% Get log Bayes factors (Geweke-Amisano eq. 9):
+bf21 = ml2 - ml1;
+bf32 = ml3 - ml2;
+bf31 = ml3 - ml1;   
+
+hold on 
+plot(datesn2, bf21, 'b', 'LineWidth', 2)
+plot(datesn2, bf32, 'r', 'LineWidth', 2)
+plot(datesn2, bf31, 'k--', 'LineWidth', 2)
+hline(0, 'k')
+hold off
+
+xlim ([min(datesn2(datesind)) max(datesn2(datesind))])
+set(gca, 'XTick', datesn2(datesind));
+set(gca, 'XTickLabel', datestr(datesn2(datesind), 'mm/yy'));
+
+% legend('VAR/VAR^§', 'TAR/VAR', 'TAR/VAR^§', 'Location', 'NorthWest'), legend BOXON
+legend('VAR/MSVAR', 'TAR/VAR', 'TAR/MSVAR', 'Location', 'NorthWest'), legend BOXON
+
+title('Bayes factors (y,pi)')

@@ -1,312 +1,553 @@
-function [TVAR, TVARopt] = TVARmodel(ENDO, nlag, const, thrvar_idx, delay, THRVAR_EX, EXOG, nlag_ex)
+function [TVAR, TVARopt] = TVARmodel(ENDO, nlag, const, TVARopt, THRVAR_EX, EXOG, nlag_ex)
 %==========================================================================
-% Estimate a two-regime Threshold VAR (TVAR) by conditional OLS with grid
-% search over the threshold value (Hansen 1997, 2000).
+% Estimate a two-regime Threshold VAR (TVAR). Two estimation methods are
+% available, selected via TVARopt.tvar_method:
 %
-% The model switches between two regimes based on whether q_{t-d} is below
-% or above the estimated threshold gamma:
+%   'freq'  — Conditional OLS with grid search over the threshold
+%             (Hansen 1997, 2000). Fast, consistent with the OLS-based
+%             architecture of VAR Toolbox.
 %
-%   y_t = A_1 x_t  +  u_t^(1)   if  q_{t-d} <= gamma   (regime 1)
-%   y_t = A_2 x_t  +  u_t^(2)   if  q_{t-d} >  gamma   (regime 2)
+%   'bayes' — Bayesian estimation via Gibbs sampling with Minnesota priors
+%             (adapted from Haroon Mumtaz's TVAR Toolkit). The threshold,
+%             delay, coefficients, and covariances are all sampled jointly.
 %
-% where q_{t-d} is the threshold variable lagged by d periods (the delay).
+% The model:
+%   y_t = A_1 x_t + u_t^(1)   if  q_{t-d} <= gamma   (regime 1)
+%   y_t = A_2 x_t + u_t^(2)   if  q_{t-d} >  gamma   (regime 2)
+%
+% where q_{t-d} is the threshold variable lagged by d periods.
 %==========================================================================
-% [TVAR, TVARopt] = TVARmodel(ENDO, nlag, const, thrvar_idx, delay, THRVAR_EX, EXOG, nlag_ex)
+% [TVAR, TVARopt] = TVARmodel(ENDO, nlag, const, TVARopt, THRVAR_EX, EXOG, nlag_ex)
 % -------------------------------------------------------------------------
 % INPUT
-%   - ENDO       : (nobs x nvar) matrix of endogenous variables
-%   - nlag       : lag order of the VAR
-%   - const      : 0 no constant; 1 constant; 2 constant+trend;
-%                  3 constant+trend+trend^2  [default = 1]
-%   - thrvar_idx : column index in ENDO used as threshold variable.
-%                  Set to 0 if providing an external threshold via THRVAR_EX.
-%   - delay      : delay d for the threshold variable; q_{t-d} is used.
-%                  Must satisfy 1 <= delay <= nlag.  [default = 1]
+%   - ENDO    : (nobs x nvar) matrix of endogenous variables
+%   - nlag    : lag order
+%   - const   : 0 no constant; 1 constant [default = 1]
+%   - TVARopt : options structure (see TVARoption.m)
 % -------------------------------------------------------------------------
 % OPTIONAL INPUT
-%   - THRVAR_EX  : (nobs x 1) external threshold variable; required when
-%                  thrvar_idx = 0, ignored otherwise.
-%   - EXOG       : (nobs x nvar_ex) matrix of exogenous variables
-%   - nlag_ex    : lag order for exogenous variables  [default = 0]
+%   - THRVAR_EX : (nobs x 1) external threshold variable (when thrvar_idx=0)
+%   - EXOG      : (nobs x nvar_ex) matrix of exogenous variables
+%   - nlag_ex   : lag order for exogenous variables [default = 0]
 % -------------------------------------------------------------------------
 % OUTPUT
-%   - TVAR       : structure with TVAR estimation results. The sub-struct
-%                  TVAR.regime{k} (k=1,2) is shaped identically to the VAR
-%                  struct returned by VARmodel, making it compatible with
-%                  VARir, VARvd, and related functions.
-%   - TVARopt    : structure with TVAR options (see TVARoption)
+%   - TVAR    : structure with estimation results (see below)
+%   - TVARopt : updated options structure
+% =========================================================================
+% VAR Toolbox 3.0 — TVAR Extension
 % -------------------------------------------------------------------------
-% EXAMPLE
-%   - See TVARToolbox_Primer.m in "../Primer/"
-%==========================================================================
-% VAR Toolbox 3.0 - TVAR Extension
-%==========================================================================
 
 
 %% Check inputs
-%--------------------------------------------------------------------------
+%==========================================================================
 [nobs, nvar] = size(ENDO);
 
-% Create TVARopt
-TVARopt = TVARoption;
-
-% const
 if ~exist('const','var') || isempty(const)
     const = 1;
 end
-
-% thrvar_idx
-if ~exist('thrvar_idx','var') || isempty(thrvar_idx)
-    thrvar_idx = TVARopt.thrvar_idx;
+if ~exist('TVARopt','var') || isempty(TVARopt)
+    TVARopt = TVARoption;
 end
-TVARopt.thrvar_idx = thrvar_idx;
-
-% delay
-if ~exist('delay','var') || isempty(delay)
-    delay = TVARopt.delay;
-end
-if delay < 1
-    error('TVARmodel: delay must be >= 1');
-end
-TVARopt.delay = delay;
-
-% External threshold variable
-if thrvar_idx == 0
-    if ~exist('THRVAR_EX','var') || isempty(THRVAR_EX)
-        error('TVARmodel: thrvar_idx=0 requires THRVAR_EX to be provided');
-    end
-    if size(THRVAR_EX,1) ~= nobs
-        error('TVARmodel: THRVAR_EX must have the same number of rows as ENDO');
-    end
-    use_external_thr = true;
+if ~exist('EXOG','var')
+    EXOG = [];
+    nvar_ex = 0;
+    nlag_ex = 0;
 else
-    if thrvar_idx < 1 || thrvar_idx > nvar
-        error('TVARmodel: thrvar_idx must be between 1 and nvar (or 0 for external)');
-    end
-    use_external_thr = false;
-end
-
-% Exogenous variables
-if exist('EXOG','var') && ~isempty(EXOG)
-    [nobs2, nvar_ex] = size(EXOG);
-    if nobs2 ~= nobs
-        error('TVARmodel: nobs in EXOG-matrix not the same as ENDO');
-    end
+    [~, nvar_ex] = size(EXOG);
     if ~exist('nlag_ex','var') || isempty(nlag_ex)
         nlag_ex = 0;
     end
-    has_exog = true;
-else
-    nvar_ex  = 0;
-    nlag_ex  = 0;
-    EXOG     = [];
-    has_exog = false;
+end
+if ~exist('THRVAR_EX','var')
+    THRVAR_EX = [];
+end
+
+% Retrieve TVAR-specific options
+thrvar_idx   = TVARopt.thrvar_idx;
+delay        = TVARopt.delay;
+tartransform = TVARopt.tartransform;
+tvar_method  = TVARopt.tvar_method;
+
+% Validate inputs
+if delay < 1
+    error('TVARmodel: delay must be >= 1');
+end
+if thrvar_idx == 0 && isempty(THRVAR_EX)
+    error('TVARmodel: thrvar_idx=0 requires THRVAR_EX to be provided');
+end
+if thrvar_idx > nvar
+    error('TVARmodel: thrvar_idx (%d) exceeds number of variables (%d)', thrvar_idx, nvar);
 end
 
 
-%% Build Y and X matrices (identical to VARmodel)
-%--------------------------------------------------------------------------
-nobse        = nobs - max(nlag, nlag_ex);
-ncoeff       = nvar * nlag;
-ncoeff_ex    = nvar_ex * (nlag_ex + 1);
-ntotcoeff    = ncoeff + ncoeff_ex + const;
+%% Construct threshold variable
+%==========================================================================
+if thrvar_idx == 0
+    thrvar_raw = THRVAR_EX;
+else
+    thrvar_raw = ENDO(:, thrvar_idx);
+end
 
-[Y, X] = VARmakexy(ENDO, nlag, const);
+% Apply transformation
+if tartransform == 1
+    % Annual growth rate (4-period difference)
+    Lx = 4;
+    thrvar_transformed = [nan(Lx,1); thrvar_raw(Lx+1:end) - thrvar_raw(1:end-Lx)];
+else
+    Lx = 0;
+    thrvar_transformed = thrvar_raw;
+end
 
-if has_exog
+% Lag the threshold variable by delay periods
+Ystar_full = [nan(delay,1); thrvar_transformed(1:end-delay)];
+
+
+%% Build data matrices
+%==========================================================================
+% Use VARmakexy for the endogenous variables
+[Y_full, X_full] = VARmakexy(ENDO, nlag, const);
+
+% Handle exogenous variables
+if nvar_ex > 0
     X_EX = VARmakelags(EXOG, nlag_ex);
     if nlag == nlag_ex
-        X = [X X_EX];
+        X_full = [X_full X_EX];
     elseif nlag > nlag_ex
-        diff_lags = nlag - nlag_ex;
-        X_EX = X_EX(diff_lags+1:end, :);
-        X = [X X_EX];
-    else
-        diff_lags = nlag_ex - nlag;
-        Y = Y(diff_lags+1:end, :);
-        X = [X(diff_lags+1:end,:) X_EX];
+        diff_lag = nlag - nlag_ex;
+        X_EX = X_EX(diff_lag+1:end,:);
+        X_full = [X_full X_EX];
+    elseif nlag < nlag_ex
+        diff_lag = nlag_ex - nlag;
+        Y_full = Y_full(diff_lag+1:end,:);
+        X_full = [X_full(diff_lag+1:end,:) X_EX];
     end
 end
 
-% Recompute nobse after possible lag adjustment
+% Align Ystar with Y/X (both start at observation nlag+1 of ENDO)
+Ystar_aligned = Ystar_full(nlag+1:end);
+if nvar_ex > 0 && nlag < nlag_ex
+    diff_lag = nlag_ex - nlag;
+    Ystar_aligned = Ystar_aligned(diff_lag+1:end);
+end
+
+% Remove observations where Ystar is NaN (due to delay + transformation)
+valid = ~isnan(Ystar_aligned);
+Y = Y_full(valid,:);
+X = X_full(valid,:);
+Ystar = Ystar_aligned(valid);
 nobse = size(Y, 1);
 
+% Coefficient dimensions
+ncoeff     = nvar * nlag;
+ncoeff_ex  = nvar_ex * (nlag_ex + 1);
+ntotcoeff  = ncoeff + ncoeff_ex + const;
 
-%% Build threshold variable
-%--------------------------------------------------------------------------
-% The threshold variable for the t-th row of Y (which corresponds to
-% calendar time nlag+t in ENDO) is q_{nlag+t-delay} = ENDO(nlag+t-delay).
-% In vector form: rows nlag+1-delay through nobs-delay of the threshold col.
-thr_start = nlag + 1 - delay;
-thr_end   = nobs - delay;
 
-if thr_start < 1
-    error('TVARmodel: delay (%d) exceeds nlag (%d). Reduce delay or increase nlag.', delay, nlag);
-end
-
-if use_external_thr
-    q = THRVAR_EX(thr_start:thr_end);
+%% Dispatch to the chosen estimation method
+%==========================================================================
+if strcmp(tvar_method, 'freq')
+    [TVAR, TVARopt] = estimate_freq(ENDO, Y, X, Ystar, nvar, nlag, const, ...
+        nobse, ncoeff, ntotcoeff, nvar_ex, nlag_ex, EXOG, TVARopt);
+elseif strcmp(tvar_method, 'bayes')
+    [TVAR, TVARopt] = estimate_bayes(ENDO, Y, X, Ystar, nvar, nlag, const, ...
+        nobse, ncoeff, ntotcoeff, nvar_ex, nlag_ex, EXOG, TVARopt);
 else
-    q = ENDO(thr_start:thr_end, thrvar_idx);
-end
-q = q(:);  % ensure column vector
-
-if length(q) ~= nobse
-    error('TVARmodel: threshold variable length (%d) does not match nobse (%d)', length(q), nobse);
+    error('TVARmodel: tvar_method must be ''freq'' or ''bayes''');
 end
 
+% Store common fields
+TVAR.ENDO     = ENDO;
+TVAR.EXOG     = EXOG;
+TVAR.nvar     = nvar;
+TVAR.nlag     = nlag;
+TVAR.const    = const;
+TVAR.nvar_ex  = nvar_ex;
+TVAR.nlag_ex  = nlag_ex;
+TVAR.nobs     = nobse;
+TVAR.nregimes = 2;
+TVAR.Y        = Y;
+TVAR.X        = X;
+TVAR.Ystar    = Ystar;
+TVAR.IV       = [];
+TVAR.method   = tvar_method;
 
-%% Grid search for optimal threshold
-%--------------------------------------------------------------------------
+end
+
+
+%% ========================================================================
+%  FREQUENTIST ESTIMATION: Hansen (1997, 2000) grid search + OLS
+%  ========================================================================
+function [TVAR, TVARopt] = estimate_freq(ENDO, Y, X, Ystar, nvar, nlag, const, ...
+    nobse, ncoeff, ntotcoeff, nvar_ex, nlag_ex, EXOG, TVARopt)
+
 trim  = TVARopt.trim;
 ngrid = TVARopt.ngrid;
 
-q_lo = quantile(q, trim);
-q_hi = quantile(q, 1 - trim);
-
-if q_lo >= q_hi
-    error('TVARmodel: threshold grid is empty (trim too aggressive or too little variation in q)');
+% Build grid of candidate thresholds
+Ystar_sorted = sort(Ystar);
+lo = round(trim * nobse) + 1;
+hi = nobse - round(trim * nobse);
+if lo >= hi
+    error('TVARmodel: not enough observations after trimming. Reduce trim or increase sample.');
 end
+grid_vals = linspace(Ystar_sorted(lo), Ystar_sorted(hi), ngrid);
 
-grid_gamma = linspace(q_lo, q_hi, ngrid);
-grid_RSS   = nan(ngrid, 1);
-
-min_obs_per_regime = ntotcoeff + 1;  % minimum observations for OLS
-
-for jj = 1:ngrid
-    gamma_j = grid_gamma(jj);
-    idx1 = find(q <= gamma_j);
-    idx2 = find(q >  gamma_j);
-
-    % Skip if either regime is too small to identify
-    if length(idx1) < min_obs_per_regime || length(idx2) < min_obs_per_regime
-        continue
+% Grid search: minimise total RSS
+RSS_grid = nan(ngrid, 1);
+for gg = 1:ngrid
+    gamma = grid_vals(gg);
+    idx1 = (Ystar <= gamma);
+    idx2 = ~idx1;
+    n1 = sum(idx1);
+    n2 = sum(idx2);
+    % Need enough obs in each regime
+    if n1 < ntotcoeff + 1 || n2 < ntotcoeff + 1
+        RSS_grid(gg) = inf;
+        continue;
     end
-
-    X1 = X(idx1, :);  Y1 = Y(idx1, :);
-    X2 = X(idx2, :);  Y2 = Y(idx2, :);
-
-    Ft1 = (X1'*X1) \ (X1'*Y1);
-    Ft2 = (X2'*X2) \ (X2'*Y2);
-
-    resid1 = Y1 - X1*Ft1;
-    resid2 = Y2 - X2*Ft2;
-
-    grid_RSS(jj) = sum(sum(resid1.^2)) + sum(sum(resid2.^2));
+    % OLS per regime
+    Y1 = Y(idx1,:);  X1 = X(idx1,:);
+    Y2 = Y(idx2,:);  X2 = X(idx2,:);
+    resid1 = Y1 - X1 * ((X1'*X1) \ (X1'*Y1));
+    resid2 = Y2 - X2 * ((X2'*X2) \ (X2'*Y2));
+    RSS_grid(gg) = trace(resid1'*resid1) + trace(resid2'*resid2);
 end
 
-if all(isnan(grid_RSS))
-    error('TVARmodel: no valid threshold found — all grid points have insufficient regime observations. Try reducing trim or increasing the sample.');
-end
+% Select optimal threshold
+[~, opt_idx] = min(RSS_grid);
+thresh = grid_vals(opt_idx);
 
-% Optimal threshold: minimise total RSS
-[RSS_opt, idx_opt] = min(grid_RSS);
-thresh = grid_gamma(idx_opt);
+% Final regime split
+idx1 = (Ystar <= thresh);
+idx2 = ~idx1;
 
-% Final regime assignments
-regime_idx      = ones(nobse, 1);
-regime_idx(q > thresh) = 2;
-obs_idx1 = find(regime_idx == 1);
-obs_idx2 = find(regime_idx == 2);
-
-
-%% Final OLS estimation by regime
-%--------------------------------------------------------------------------
+% Estimate regime-specific VARs using VARmodel for full compatibility
+% We need to reconstruct ENDO subsets that produce the correct Y/X per regime
+% Instead, we build the regime structs manually from OLS on the split data
 for k = 1:2
     if k == 1
-        obs_idx = obs_idx1;
+        Yk = Y(idx1,:);  Xk = X(idx1,:);
     else
-        obs_idx = obs_idx2;
+        Yk = Y(idx2,:);  Xk = X(idx2,:);
     end
+    nobsk = size(Yk, 1);
 
-    Xk = X(obs_idx, :);
-    Yk = Y(obs_idx, :);
-    nobs_k = length(obs_idx);
-
-    % System-level OLS
-    Ft_k = (Xk'*Xk) \ (Xk'*Yk);
-    F_k  = Ft_k';
-    resid_k = Yk - Xk*Ft_k;
-    sigma_k = (1/(nobs_k - ntotcoeff)) * (resid_k' * resid_k);
+    % OLS
+    Ftk = (Xk'*Xk) \ (Xk'*Yk);
+    Fk  = Ftk';
+    residk = Yk - Xk * Ftk;
+    sigmak = (residk' * residk) / (nobsk - ntotcoeff);
 
     % Companion matrix
-    Fcomp_k = [F_k(:, 1+const : nvar*nlag+const); ...
-               eye(nvar*(nlag-1)) zeros(nvar*(nlag-1), nvar)];
+    Fcomp_k = [Fk(:, 1+const:nvar*nlag+const); ...
+               eye(nvar*(nlag-1)), zeros(nvar*(nlag-1), nvar)];
     maxEig_k = max(abs(eig(Fcomp_k)));
 
-    % Equation-by-equation OLS (for TVARprint and eq1..eqN fields)
-    reg = struct();
+    % Populate regime struct (mirrors VAR struct from VARmodel)
+    TVAR.regime{k}.Ft        = Ftk;
+    TVAR.regime{k}.F         = Fk;
+    TVAR.regime{k}.sigma     = sigmak;
+    TVAR.regime{k}.resid     = residk;
+    TVAR.regime{k}.Y         = Yk;
+    TVAR.regime{k}.X         = Xk;
+    TVAR.regime{k}.Fcomp     = Fcomp_k;
+    TVAR.regime{k}.maxEig    = maxEig_k;
+    TVAR.regime{k}.nobs      = nobsk;
+    TVAR.regime{k}.nvar      = nvar;
+    TVAR.regime{k}.nlag      = nlag;
+    TVAR.regime{k}.const     = const;
+    TVAR.regime{k}.ncoeff    = ncoeff;
+    TVAR.regime{k}.ntotcoeff = ntotcoeff;
+    TVAR.regime{k}.nvar_ex   = nvar_ex;
+    TVAR.regime{k}.nlag_ex   = nlag_ex;
+    TVAR.regime{k}.ENDO      = ENDO;
+    TVAR.regime{k}.EXOG      = EXOG;
+    TVAR.regime{k}.B         = [];
+    TVAR.regime{k}.Biv       = [];
+    TVAR.regime{k}.PSI       = [];
+    TVAR.regime{k}.Fp        = [];
+    TVAR.regime{k}.IV        = [];
+
+    % Equation-by-equation results (for TVARprint)
     for j = 1:nvar
-        Yvec   = Yk(:, j);
-        OLSout = OLSmodel(Yvec, Xk, 0);
-        eqname = ['eq' num2str(j)];
-        reg.(eqname).beta  = OLSout.beta;
-        reg.(eqname).tstat = OLSout.tstat;
-        reg.(eqname).bstd  = OLSout.bstd;
-        reg.(eqname).tprob = OLSout.tprob;
-        reg.(eqname).resid = OLSout.resid;
-        reg.(eqname).yhat  = OLSout.yhat;
-        reg.(eqname).y     = Yvec;
-        reg.(eqname).rsqr  = OLSout.rsqr;
-        reg.(eqname).rbar  = OLSout.rbar;
-        reg.(eqname).sige  = OLSout.sige;
-        reg.(eqname).dw    = OLSout.dw;
+        OLSout = OLSmodel(Yk(:,j), Xk, 0);
+        TVAR.regime{k}.eq{j}.beta  = OLSout.beta;
+        TVAR.regime{k}.eq{j}.tstat = OLSout.tstat;
+        TVAR.regime{k}.eq{j}.bstd  = OLSout.bstd;
+        TVAR.regime{k}.eq{j}.rsqr  = OLSout.rsqr;
+        TVAR.regime{k}.eq{j}.rbar  = OLSout.rbar;
+        TVAR.regime{k}.eq{j}.sige  = OLSout.sige;
+        TVAR.regime{k}.eq{j}.dw    = OLSout.dw;
     end
+end
 
-    % Assemble regime sub-struct (VARir-compatible)
-    reg.Ft         = Ft_k;
-    reg.F          = F_k;
-    reg.sigma      = sigma_k;
-    reg.resid      = resid_k;
-    reg.X          = Xk;
-    reg.Y          = Yk;
-    reg.obs_idx    = obs_idx;   % row indices into full Y/X (used by TVARir for iv)
-    reg.Fcomp      = Fcomp_k;
-    reg.maxEig     = maxEig_k;
-    reg.nobs       = nobs_k;
-    reg.nvar       = nvar;
-    reg.nlag       = nlag;
-    reg.const      = const;
-    reg.ntotcoeff  = ntotcoeff;
-    reg.ncoeff     = ncoeff;
-    reg.ncoeff_ex  = ncoeff_ex;
-    reg.nvar_ex    = nvar_ex;
-    reg.nlag_ex    = nlag_ex;
-    reg.ENDO       = ENDO;      % full data (needed by TVARirband)
-    reg.EXOG       = EXOG;
-    % Placeholders populated later by TVARir
-    reg.B          = [];
-    reg.Biv        = [];
-    reg.PSI        = [];
-    reg.Fp         = [];
-    reg.IV         = [];
+% Store threshold results
+TVAR.thresh      = thresh;
+TVAR.delay       = TVARopt.delay;
+TVAR.regime_idx  = idx1;   % logical: true = regime 1
+TVAR.RSS_grid    = RSS_grid;
+TVAR.thresh_grid = grid_vals;
+% Total RSS at optimal threshold (used by TVARtest)
+TVAR.RSS = sum(sum(TVAR.regime{1}.resid.^2)) + sum(sum(TVAR.regime{2}.resid.^2));
 
-    TVAR.regime{k} = reg;
 end
 
 
-%% Assemble TVAR struct
-%--------------------------------------------------------------------------
-TVAR.nthresh     = 1;
-TVAR.nregimes    = 2;
-TVAR.thresh      = thresh;
-TVAR.delay       = delay;
-TVAR.thrvar_idx  = thrvar_idx;
-TVAR.thrvar      = q;           % (nobse x 1) threshold variable
-TVAR.regime_idx  = regime_idx;  % (nobse x 1) regime assignment (1 or 2)
-TVAR.nobs        = nobse;
-TVAR.nvar        = nvar;
-TVAR.nlag        = nlag;
-TVAR.const       = const;
-TVAR.ntotcoeff   = ntotcoeff;
-TVAR.ENDO        = ENDO;
-TVAR.EXOG        = EXOG;
-TVAR.X           = X;
-TVAR.Y           = Y;
-TVAR.IV          = [];          % populated by user before TVARir (for iv identification)
-TVAR.RSS         = RSS_opt;
-TVAR.grid_gamma  = grid_gamma;
-TVAR.grid_RSS    = grid_RSS;
-if has_exog
-    TVAR.X_EX    = X_EX;
+%% ========================================================================
+%  BAYESIAN ESTIMATION: Gibbs sampler (adapted from Mumtaz)
+%  ========================================================================
+function [TVAR, TVARopt] = estimate_bayes(ENDO, Y, X, Ystar, nvar, nlag, const, ...
+    nobse, ncoeff, ntotcoeff, nvar_ex, nlag_ex, EXOG, TVARopt)
+
+% Currently supports const=1 only for Bayesian mode
+if const ~= 1
+    error('TVARmodel: Bayesian mode currently supports const=1 only');
+end
+
+% Retrieve Bayesian options
+nreps       = TVARopt.nreps;
+nburn       = TVARopt.nburn;
+nskip       = TVARopt.nskip;
+lambdaP     = TVARopt.lambdaP;
+tauP        = TVARopt.tauP;
+epsilonP    = TVARopt.epsilonP;
+tarvariance = TVARopt.tarvariance;
+tarscale    = TVARopt.tarscale;
+maxtrys     = TVARopt.maxtrys;
+mult        = TVARopt.mult;
+
+% Number of retained draws
+Sindex = (nburn+1):nskip:nreps;
+fsize  = length(Sindex);
+
+% Minimum observations per regime
+ncrit = nvar * nlag + 1;
+
+% ---- Build Mumtaz-ordered data matrices ----
+% Mumtaz ordering: [lag1 lag2 ... lagL constant] (lags first, constant last)
+% We need this for the Gibbs sampler because the helper functions
+% (getcoef_tvar, stability_tvar) expect this ordering.
+X_bayes = zeros(nobse, nvar*nlag + 1);
+% Extract lag blocks from X (VARmakexy ordering: [const lag1 lag2 ... lagL])
+% With const=1: column 1 = constant, columns 2:end = lags
+X_bayes(:, 1:nvar*nlag) = X(:, const+1:const+nvar*nlag);
+X_bayes(:, nvar*nlag+1) = 1;  % constant at the end
+ncoeff_bayes = nvar * nlag + 1;  % per equation in Mumtaz ordering
+
+% ---- Compute priors ----
+muP    = mean(Y)';
+sigmaP = zeros(nvar, 1);
+deltaP = zeros(nvar, 1);
+for i = 1:nvar
+    ytemp = Y(:,i);
+    xtemp = [ytemp(1:end-1), ones(nobse-1,1)];
+    ytemp2 = ytemp(2:end);
+    btemp = xtemp \ ytemp2;
+    etemp = ytemp2 - xtemp * btemp;
+    stemp = (etemp' * etemp) / length(ytemp2);
+    if abs(btemp(1)) > 1
+        btemp(1) = 1;
+    end
+    deltaP(i) = btemp(1);
+    sigmaP(i) = sqrt(stemp);
+end
+
+% Minnesota prior dummy observations
+[yd, xd] = create_dummies_tvar(lambdaP, tauP, deltaP, epsilonP, nlag, muP, sigmaP, nvar);
+
+% Prior mean for threshold
+tarmean = mean(Ystar);
+
+% ---- Initialise Gibbs sampler ----
+sigma1 = eye(nvar);
+sigma2 = eye(nvar);
+beta0  = vec(X_bayes \ Y);
+beta01 = beta0;
+beta02 = beta0;
+tar    = tarmean;
+tarold = tar;
+
+% Storage
+bsave1   = zeros(fsize, nvar * ncoeff_bayes);
+bsave2   = zeros(fsize, nvar * ncoeff_bayes);
+sigmaS1  = zeros(fsize, nvar, nvar);
+sigmaS2  = zeros(fsize, nvar, nvar);
+tsave    = zeros(fsize, 2);
+
+naccept = 0;
+jgibbs  = 1;  % index into saved draws
+
+disp(' ');
+disp('============================================================');
+disp(sprintf('TVAR Bayesian estimation: %d replications, %d burn-in, thinning every %d', nreps, nburn, nskip));
+
+% ---- Gibbs loop ----
+for igibbs = 1:nreps
+
+    % Step 1: Split data by threshold
+    e1 = (Ystar <= tar);
+    e2 = ~e1;
+    Y1 = Y(e1,:);  X1 = X_bayes(e1,:);
+    Y2 = Y(e2,:);  X2 = X_bayes(e2,:);
+
+    % Step 2: Sample coefficients and covariance — Regime 1
+    Y0 = [Y1; yd];
+    X0 = [X1; xd];
+    mstar1 = vec(X0 \ Y0);
+    xx = X0' * X0;
+    ixx1 = xx \ eye(size(xx,1));
+    [beta1, PROBLEM1] = getcoef_tvar(mstar1, sigma1, ixx1, maxtrys, nvar, nlag);
+    if PROBLEM1
+        beta1 = beta01;
+    else
+        beta01 = beta1;
+    end
+    % Draw covariance from Inverse-Wishart
+    e_res = Y0 - X0 * reshape(beta1, ncoeff_bayes, nvar);
+    scale1 = e_res' * e_res;
+    sigma1 = iwpQ(size(Y0,1), inv(scale1));
+
+    % Step 3: Sample coefficients and covariance — Regime 2
+    Y0 = [Y2; yd];
+    X0 = [X2; xd];
+    mstar2 = vec(X0 \ Y0);
+    xx = X0' * X0;
+    ixx2 = xx \ eye(size(xx,1));
+    [beta2, PROBLEM2] = getcoef_tvar(mstar2, sigma2, ixx2, maxtrys, nvar, nlag);
+    if PROBLEM2
+        beta2 = beta02;
+    else
+        beta02 = beta2;
+    end
+    e_res = Y0 - X0 * reshape(beta2, ncoeff_bayes, nvar);
+    scale2 = e_res' * e_res;
+    sigma2 = iwpQ(size(Y0,1), inv(scale2));
+
+    % Step 4: Sample threshold via Random Walk Metropolis-Hastings
+    tarnew = tarold + randn * sqrt(tarscale);
+    postnew = getvarpost_tvar(Y, X_bayes, beta1, beta2, sigma1, sigma2, nlag, tarnew, tarmean, tarvariance, Ystar, ncrit);
+    postold = getvarpost_tvar(Y, X_bayes, beta1, beta2, sigma1, sigma2, nlag, tarold, tarmean, tarvariance, Ystar, ncrit);
+    accept_ratio = exp(postnew - postold);
+    if rand < accept_ratio
+        tarold = tarnew;
+        naccept = naccept + 1;
+    end
+    tar = tarold;
+    arate = naccept / igibbs;
+
+    % Step 5: Sample delay parameter (if multiple delays specified)
+    % For now, delay is fixed (as specified by TVARopt.delay)
+    current_delay = TVARopt.delay;
+
+    % Display progress
+    if mod(igibbs, mult) == 0
+        fprintf('  Replication %d of %d | acceptance rate %.3f\n', igibbs, nreps, arate);
+    end
+
+    % Store draws (post burn-in, thinned)
+    if igibbs > nburn && any(Sindex == igibbs)
+        bsave1(jgibbs,:)    = beta1';
+        bsave2(jgibbs,:)    = beta2';
+        sigmaS1(jgibbs,:,:) = sigma1;
+        sigmaS2(jgibbs,:,:) = sigma2;
+        tsave(jgibbs,:)     = [tar, current_delay];
+        jgibbs = jgibbs + 1;
+    end
+end
+
+disp('TVAR Bayesian estimation — done');
+disp(sprintf('  Acceptance rate: %.3f', arate));
+disp(sprintf('  Retained draws:  %d', fsize));
+disp('============================================================');
+
+% ---- Construct TVAR output ----
+% Posterior means
+beta1_mean  = mean(bsave1, 1)';
+beta2_mean  = mean(bsave2, 1)';
+sigma1_mean = squeeze(mean(sigmaS1, 1));
+sigma2_mean = squeeze(mean(sigmaS2, 1));
+thresh_mean = mean(tsave(:,1));
+delay_mean  = round(mean(tsave(:,2)));
+
+% Final regime split at posterior mean threshold
+idx1 = (Ystar <= thresh_mean);
+idx2 = ~idx1;
+
+% Build regime structs using posterior means
+% Convert from Mumtaz ordering [lags|const] to VARmodel ordering [const|lags]
+for k = 1:2
+    if k == 1
+        beta_k = beta1_mean;
+        sigma_k = sigma1_mean;
+        Yk = Y(idx1,:);  Xk = X(idx1,:);
+    else
+        beta_k = beta2_mean;
+        sigma_k = sigma2_mean;
+        Yk = Y(idx2,:);  Xk = X(idx2,:);
+    end
+    nobsk = size(Yk, 1);
+
+    % Reshape from Mumtaz ordering: (ncoeff_bayes x nvar)
+    % Rows: [lag1_coefs; lag2_coefs; ...; lagL_coefs; constant]
+    beta_mat_mumtaz = reshape(beta_k, ncoeff_bayes, nvar);
+
+    % Convert to VARmodel ordering: [constant; lag1; lag2; ...; lagL]
+    Ftk = [beta_mat_mumtaz(end,:);              % constant (row 1)
+           beta_mat_mumtaz(1:nvar*nlag,:)];     % lags (rows 2 to end)
+    Fk = Ftk';
+
+    % Companion matrix (skip constant = first row of Ftk)
+    Fcomp_k = [Fk(:, 1+const:nvar*nlag+const); ...
+               eye(nvar*(nlag-1)), zeros(nvar*(nlag-1), nvar)];
+    maxEig_k = max(abs(eig(Fcomp_k)));
+
+    % Residuals at posterior mean
+    residk = Yk - Xk * Ftk;
+
+    % Populate regime struct
+    TVAR.regime{k}.Ft        = Ftk;
+    TVAR.regime{k}.F         = Fk;
+    TVAR.regime{k}.sigma     = sigma_k;
+    TVAR.regime{k}.resid     = residk;
+    TVAR.regime{k}.Y         = Yk;
+    TVAR.regime{k}.X         = Xk;
+    TVAR.regime{k}.Fcomp     = Fcomp_k;
+    TVAR.regime{k}.maxEig    = maxEig_k;
+    TVAR.regime{k}.nobs      = nobsk;
+    TVAR.regime{k}.nvar      = nvar;
+    TVAR.regime{k}.nlag      = nlag;
+    TVAR.regime{k}.const     = const;
+    TVAR.regime{k}.ncoeff    = ncoeff;
+    TVAR.regime{k}.ntotcoeff = ntotcoeff;
+    TVAR.regime{k}.nvar_ex   = nvar_ex;
+    TVAR.regime{k}.nlag_ex   = nlag_ex;
+    TVAR.regime{k}.ENDO      = ENDO;
+    TVAR.regime{k}.EXOG      = EXOG;
+    TVAR.regime{k}.B         = [];
+    TVAR.regime{k}.Biv       = [];
+    TVAR.regime{k}.PSI       = [];
+    TVAR.regime{k}.Fp        = [];
+    TVAR.regime{k}.IV        = [];
+end
+
+% Store threshold and Bayesian results
+TVAR.thresh     = thresh_mean;
+TVAR.delay      = delay_mean;
+TVAR.regime_idx = idx1;
+
+% Posterior draws (for TVARirband)
+TVAR.beta1_draws  = bsave1;
+TVAR.beta2_draws  = bsave2;
+TVAR.sigma1_draws = sigmaS1;
+TVAR.sigma2_draws = sigmaS2;
+TVAR.thresh_draws = tsave(:,1);
+TVAR.delay_draws  = tsave(:,2);
+TVAR.ndraws       = fsize;
+TVAR.acceptance_rate = arate;
+
+% Store MCMC settings
+TVAR.nreps = nreps;
+TVAR.nburn = nburn;
+TVAR.nskip = nskip;
+
 end

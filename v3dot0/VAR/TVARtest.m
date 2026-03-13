@@ -1,4 +1,4 @@
-function out = TVARtest(ENDO, nlag, const, thrvar_idx, delay, VARopt, THRVAR_EX, EXOG, nlag_ex)
+function out = TVARtest(ENDO, nlag, const, TVARopt, THRVAR_EX, EXOG, nlag_ex)
 %==========================================================================
 % Bootstrap test of linearity (no threshold) against a two-regime
 % Threshold VAR, following Hansen (1999).
@@ -14,21 +14,19 @@ function out = TVARtest(ENDO, nlag, const, thrvar_idx, delay, VARopt, THRVAR_EX,
 % generating data under H0 (linear VAR) and re-running the full grid
 % search on each bootstrap draw.
 %==========================================================================
-% out = TVARtest(ENDO, nlag, const, thrvar_idx, delay, VARopt, THRVAR_EX, EXOG, nlag_ex)
+% out = TVARtest(ENDO, nlag, const, TVARopt, THRVAR_EX, EXOG, nlag_ex)
 % -------------------------------------------------------------------------
 % INPUT
-%   - ENDO       : (nobs x nvar) matrix of endogenous variables
-%   - nlag       : lag order
-%   - const      : 0=none; 1=constant; 2=const+trend; 3=const+trend+trend^2
-%   - thrvar_idx : column index in ENDO for threshold variable (0=external)
-%   - delay      : delay d for threshold variable  [default = 1]
-%   - VARopt     : VAR options structure (uses VARopt.ndraws, VARopt.method,
-%                  VARopt.mult for display)
+%   - ENDO    : (nobs x nvar) matrix of endogenous variables
+%   - nlag    : lag order
+%   - const   : 0=none; 1=constant; 2=const+trend; 3=const+trend+trend^2
+%   - TVARopt : TVAR options structure (see TVARoption.m). Uses:
+%               .thrvar_idx, .delay, .ndraws, .method, .mult, .trim, .ngrid
 % -------------------------------------------------------------------------
 % OPTIONAL INPUT
-%   - THRVAR_EX  : (nobs x 1) external threshold variable (if thrvar_idx=0)
-%   - EXOG       : (nobs x nvar_ex) exogenous variables
-%   - nlag_ex    : lag order for exogenous variables
+%   - THRVAR_EX : (nobs x 1) external threshold variable (if thrvar_idx=0)
+%   - EXOG      : (nobs x nvar_ex) exogenous variables
+%   - nlag_ex   : lag order for exogenous variables
 % -------------------------------------------------------------------------
 % OUTPUT
 %   - out.F_stat     : observed F-type test statistic
@@ -37,8 +35,10 @@ function out = TVARtest(ENDO, nlag, const, thrvar_idx, delay, VARopt, THRVAR_EX,
 %   - out.nboot      : number of accepted bootstrap draws
 %   - out.RSS_linear : RSS of the linear VAR
 %   - out.RSS_tvar   : RSS of the TVAR at the optimal threshold
-%   - out.grid_gamma : threshold grid from TVARmodel
-%   - out.grid_RSS   : TVAR RSS at each grid point
+%   - out.thresh     : estimated threshold
+%   - out.thresh_grid: threshold grid from TVARmodel
+%   - out.RSS_grid   : TVAR RSS at each grid point
+%   - out.F_boot     : full bootstrap distribution
 % -------------------------------------------------------------------------
 % EXAMPLE
 %   - See TVARToolbox_Primer.m in "../Primer/"
@@ -51,18 +51,18 @@ function out = TVARtest(ENDO, nlag, const, thrvar_idx, delay, VARopt, THRVAR_EX,
 
 %% Check inputs
 %--------------------------------------------------------------------------
-if ~exist('delay','var') || isempty(delay)
-    delay = 1;
-end
 if ~exist('const','var') || isempty(const)
     const = 1;
 end
-if ~exist('VARopt','var')
-    VARopt = VARoption;
+if ~exist('TVARopt','var') || isempty(TVARopt)
+    TVARopt = TVARoption;
 end
 
-nboot  = VARopt.ndraws;
-method = VARopt.method;
+% Extract options
+thrvar_idx = TVARopt.thrvar_idx;
+delay      = TVARopt.delay;
+nboot      = TVARopt.ndraws;
+method     = TVARopt.method;
 
 has_threx  = exist('THRVAR_EX','var') && ~isempty(THRVAR_EX);
 has_exog   = exist('EXOG','var') && ~isempty(EXOG);
@@ -85,18 +85,22 @@ end
 resid0  = VAR0.resid;
 RSS0    = sum(sum(resid0.^2));
 
-% TVAR: run TVARmodel
+% Ensure TVARopt.tvar_method is 'freq' for the grid search
+TVARopt_test = TVARopt;
+TVARopt_test.tvar_method = 'freq';
+
+% TVAR on actual data
 if thrvar_idx == 0 && has_threx
     if has_exog
-        [TVAR, ~] = TVARmodel(ENDO, nlag, const, thrvar_idx, delay, THRVAR_EX, EXOG, nlag_ex);
+        [TVAR, ~] = TVARmodel(ENDO, nlag, const, TVARopt_test, THRVAR_EX, EXOG, nlag_ex);
     else
-        [TVAR, ~] = TVARmodel(ENDO, nlag, const, thrvar_idx, delay, THRVAR_EX);
+        [TVAR, ~] = TVARmodel(ENDO, nlag, const, TVARopt_test, THRVAR_EX);
     end
 else
     if has_exog
-        [TVAR, ~] = TVARmodel(ENDO, nlag, const, thrvar_idx, delay, [], EXOG, nlag_ex);
+        [TVAR, ~] = TVARmodel(ENDO, nlag, const, TVARopt_test, [], EXOG, nlag_ex);
     else
-        [TVAR, ~] = TVARmodel(ENDO, nlag, const, thrvar_idx, delay);
+        [TVAR, ~] = TVARmodel(ENDO, nlag, const, TVARopt_test);
     end
 end
 
@@ -110,20 +114,23 @@ F_stat   = nobse * (RSS0 - RSS1) / RSS1;
 Ft0      = VAR0.Ft;        % (ntotcoeff x nvar) linear VAR coefficients
 resid0   = VAR0.resid;     % (nobse x nvar) linear VAR residuals
 
-% Grid options for the bootstrap TVAR (re-use TVARopt from TVAR)
-thrvar_idx_boot = thrvar_idx;
-delay_boot      = delay;
-
 F_b  = nan(nboot, 1);
 tt   = 1;   % accepted draws
 ww   = 1;   % display counter
 
 y_art = zeros(nobs, nvar);
 
+% Display multiplier
+if isfield(TVARopt,'mult') && TVARopt.mult > 0
+    mult = TVARopt.mult;
+else
+    mult = 100;
+end
+
 while tt <= nboot
 
     % Progress display
-    if tt == VARopt.mult * ww
+    if tt == mult * ww
         disp(['TVARtest bootstrap: ' num2str(tt) ' / ' num2str(nboot)]);
         ww = ww + 1;
     end
@@ -180,15 +187,15 @@ while tt <= nboot
     try
         if thrvar_idx == 0 && has_threx
             if has_exog
-                TVAR_b = TVARmodel(y_art, nlag, const, thrvar_idx_boot, delay_boot, THRVAR_EX, EXOG, nlag_ex);
+                TVAR_b = TVARmodel(y_art, nlag, const, TVARopt_test, THRVAR_EX, EXOG, nlag_ex);
             else
-                TVAR_b = TVARmodel(y_art, nlag, const, thrvar_idx_boot, delay_boot, THRVAR_EX);
+                TVAR_b = TVARmodel(y_art, nlag, const, TVARopt_test, THRVAR_EX);
             end
         else
             if has_exog
-                TVAR_b = TVARmodel(y_art, nlag, const, thrvar_idx_boot, delay_boot, [], EXOG, nlag_ex);
+                TVAR_b = TVARmodel(y_art, nlag, const, TVARopt_test, [], EXOG, nlag_ex);
             else
-                TVAR_b = TVARmodel(y_art, nlag, const, thrvar_idx_boot, delay_boot);
+                TVAR_b = TVARmodel(y_art, nlag, const, TVARopt_test);
             end
         end
         RSS1_b = TVAR_b.RSS;
@@ -205,7 +212,7 @@ end
 disp('TVARtest bootstrap: Done!');
 disp(' ');
 
-% Remove any NaN entries (shouldn't happen, but guard)
+% Remove any NaN entries
 F_b = F_b(~isnan(F_b));
 
 
@@ -242,6 +249,6 @@ out.nboot       = length(F_b);
 out.RSS_linear  = RSS0;
 out.RSS_tvar    = RSS1;
 out.thresh      = TVAR.thresh;
-out.grid_gamma  = TVAR.grid_gamma;
-out.grid_RSS    = TVAR.grid_RSS;
+out.thresh_grid = TVAR.thresh_grid;
+out.RSS_grid    = TVAR.RSS_grid;
 out.F_boot      = F_b;   % full bootstrap distribution (useful for plotting)

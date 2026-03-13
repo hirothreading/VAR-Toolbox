@@ -1,0 +1,11 @@
+function out=lmda1(theta,out1,gbar)
+
+%parameter bounds
+if abs(theta)>50
+    out=1000000;
+else
+lamda1=theta;
+
+mout1=out1(end,:);
+out=mean(exp(lamda1.*(mout1-repmat(gbar,1,cols(out1)))));
+end

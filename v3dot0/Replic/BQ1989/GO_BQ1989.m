@@ -84,5 +84,5 @@ plot(zeros(VARopt.nsteps),'-k')
 title('Demand shock')
 legend({'GDP Level';'Unemployment'})
 % Save
-SaveFigure('BQ_Replication',1);
+set(gcf,'Color','w'); exportgraphics(gcf,'BQ_Replication.pdf','ContentType','vector');
 clf('reset')

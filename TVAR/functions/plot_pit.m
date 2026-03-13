@@ -1,0 +1,31 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Histograms of PIT:
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Load output file with VAR0, VAR, TAR, TVTP structures:
+load 'D:\My_Documents\Density_forecasts\Code\TVAR\files\output_13_11_26\output_merge.mat' 
+
+% Number of buckets for histograms:
+kk = round(T2/20);
+
+% Use NaNs for missing variables (fin cond indicator in VAR0 and TVTP)
+VAR0.pit0 = VAR0.pit;
+VAR0.pit0(:,4) = NaN; 
+TVTP.pit0 = TVTP.pit;
+TVTP.pit0(:,4) = NaN; 
+
+figure('Name', 'PITs')
+for ii = 1:N
+    subplot(4, N, ii), hist(VAR0.pit0(:, ii), kk), xlim([0 1]), axis square, title(vnamesvar(ii)), ylabel('VAR^§')
+    subplot(4, N, N+ii), hist(VAR.pit(:, ii), kk), xlim([0 1]), axis square, title(vnamesvar(ii)), ylabel('VAR')
+    subplot(4, N, 2*N+ii), hist(TAR.pit(:, ii), kk), xlim([0 1]), axis square, title(vnamesvar(ii)), ylabel('TAR')
+    subplot(4, N, 3*N+ii), hist(TVTP.pit0(:, ii), kk), xlim([0 1]), axis square, title(vnamesvar(ii)), ylabel('MSVAR')
+end
+
+% figure('Name', 'PITs, inverse N')
+% for ii = 1:N
+%     subplot(2, N, ii), hist(VAR.pitin(:, ii), kk), axis square, title('VAR')
+%     subplot(2, N, N+ii), hist(TAR.pitin(:, ii), kk), axis square, title('TAR')
+% end
+
+clear kk

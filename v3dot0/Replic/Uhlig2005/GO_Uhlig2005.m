@@ -99,7 +99,7 @@ for ii=1:Xnvar
 end
 
 % Save
-SaveFigure('Uhligh_Replication',1)
+set(gcf,'Color','w'); exportgraphics(gcf,'Uhligh_Replication.pdf','ContentType','vector')
 
 
 

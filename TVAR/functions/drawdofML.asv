@@ -1,0 +1,8 @@
+function [ outnum ] = drawdofML( vg,vmean,vscale,omegainv,T,vprior )
+
+   [ pnew ] = postv( vprior,vmean,omegainv,T) ;
+   [ pold ] = postv( vprior,vg,omegainv,T) ;
+   accept=exp(pnew-pold);
+   
+M=vg;
+V=vscale;

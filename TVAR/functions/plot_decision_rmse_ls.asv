@@ -1,0 +1,34 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% G-W decision rules 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+datesind = 2:48:342;
+
+hh = 3;
+
+%% LS and RMSE decision rules for a given variable and horizon:
+figure('Name', 'Decision rule (IP)')
+
+ii = 1; 
+tempLS   = squeeze(GWdr.ls0(:,ii,hh)); 
+tempRMSE = squeeze(GWdr.rmse0(:,ii,hh));
+
+hold on
+plot(datesn2, tempRMSE, 'b', 'Linewidth', 1.5)
+plot(datesn2, tempLS, 'r', 'Linewidth', 1.5)
+hline(0, 'k')
+hold off
+
+axis tight
+
+% ylim([-1 5])
+legend('RMSE', 'LS', 'Location', 'NorthWest'), legend BOXOFF
+% title(vnamemsvar(ii))
+
+set(gca, 'XTick', datesn2(datesind));
+set(gca, 'XTickLabel', datestr(datesn2(datesind), 'mm/yy'));
+
+
+%% housekeeping
+delete temp*
+

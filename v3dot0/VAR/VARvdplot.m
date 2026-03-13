@@ -93,7 +93,7 @@ if quality
     opt = LegOption; opt.handle = H(1,:);
     LegSubplot(snames,opt);
     set(gcf, 'Color', 'w');
-    export_fig(FigName,'-pdf','-painters')
+    exportgraphics(gcf,[FigName '.pdf'],'ContentType','vector')
 else
     legend(H(1,:),snames)
     print('-dpdf','-r100',FigName);

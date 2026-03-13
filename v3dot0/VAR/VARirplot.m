@@ -119,15 +119,13 @@ for jj=pick:nshocks
     end
     % Save
     FigName = [filename num2str(jj)];
-    if quality==1
+    if quality==1 || quality==2
         if suptitle==1
             Alphabet = char('a'+(1:nshocks)-1);
             SupTitle([Alphabet(jj) ') IR to a shock to '  vnames{jj}])
         end
         set(gcf, 'Color', 'w');
-        export_fig(FigName,'-pdf','-painters')
-    elseif quality==2
-        exportgraphics(gcf,[FigName '.pdf'])
+        exportgraphics(gcf,[FigName '.pdf'],'ContentType','vector')
     elseif quality==0
         print('-dpdf','-r100',FigName);
     end

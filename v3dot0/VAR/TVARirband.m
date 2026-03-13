@@ -1,248 +1,286 @@
 function [INF, SUP, MED, BAR] = TVARirband(TVAR, VARopt)
 %==========================================================================
-% Compute bootstrap confidence bands for regime-specific impulse response
-% functions from a Threshold VAR estimated with TVARmodel / TVARir.
+% Compute confidence / credible bands for TVAR Generalized IRFs.
 %
-% The bootstrap uses a fixed-design approach (standard in the TVAR
-% literature): artificial data is generated with the same threshold
-% variable values as observed, so the regime assignments at each time step
-% are fixed at their observed values when propagating shocks. The threshold
-% gamma is re-estimated in each bootstrap draw.
+%   Frequentist (tvar_method='freq'): bootstrap with residual resampling,
+%     GIRF re-computed at each bootstrap draw.
+%   Bayesian   (tvar_method='bayes'): GIRF computed at each posterior draw.
+%
+% Output arrays are 4-D (or 5-D with multiple pctg):
+%   (nsteps x nvar x nshocks x nregimes [x npctg])
 %==========================================================================
 % [INF, SUP, MED, BAR] = TVARirband(TVAR, VARopt)
 % -------------------------------------------------------------------------
 % INPUT
-%   - TVAR   : structure, result of TVARmodel.m (and optionally TVARir.m
-%              for 'sign' identification where regime{k}.B is pre-set)
-%   - VARopt : VAR options.  Key fields used:
-%                .nsteps   - IRF horizon
-%                .ndraws   - number of bootstrap draws
-%                .pctg     - confidence level  (e.g. 68 or 95)
-%                .method   - 'bs' (standard) or 'wild'
-%                .ident    - identification scheme (same as TVARir)
-%                .mult     - print-every-N-draws counter
+%   - TVAR   : structure from TVARmodel.m
+%   - VARopt : options (nsteps, ndraws, pctg, nreps_girf, etc.)
 % -------------------------------------------------------------------------
 % OUTPUT
-%   - INF(h,n,s,k) : lower confidence band
-%   - SUP(h,n,s,k) : upper confidence band
-%   - MED(h,n,s,k) : median IRF
-%   - BAR(h,n,s,k) : mean IRF
-%   Dimensions: (nsteps x nvar x nvar x nregimes)
-%   k=1 => regime 1,  k=2 => regime 2
+%   - INF : lower band
+%   - SUP : upper band
+%   - MED : median
+%   - BAR : mean
+% =========================================================================
+% VAR Toolbox 3.0 — TVAR Extension
 % -------------------------------------------------------------------------
-% NOTE
-%   For 'iv' identification TVAR.IV must be set.
-%   For 'sign' identification the B matrix for each regime must be set
-%   via SR before calling TVARirband (sign restrictions are NOT
-%   re-identified in each bootstrap draw in this implementation).
-% -------------------------------------------------------------------------
-% EXAMPLE
-%   - See TVARToolbox_Primer.m in "../Primer/"
-%==========================================================================
-% VAR Toolbox 3.0 - TVAR Extension
-%==========================================================================
 
 
 %% Check inputs
-%--------------------------------------------------------------------------
+%==========================================================================
 if ~exist('TVAR','var')
     error('You need to provide TVAR structure, result of TVARmodel');
-end
-if ~exist('VARopt','var')
-    error('You need to provide VARopt structure');
 end
 
 nsteps   = VARopt.nsteps;
 ndraws   = VARopt.ndraws;
 pctg     = VARopt.pctg;
-method   = VARopt.method;
-ident    = VARopt.ident;
 nvar     = TVAR.nvar;
 nlag     = TVAR.nlag;
-const    = TVAR.const;
-nobse    = TVAR.nobs;
-nobs     = size(TVAR.ENDO, 1);
 nregimes = TVAR.nregimes;
-ENDO     = TVAR.ENDO;
-EXOG     = TVAR.EXOG;
-regime_idx  = TVAR.regime_idx;
-thrvar_idx  = TVAR.thrvar_idx;
-delay       = TVAR.delay;
 
-% Regime residuals and coefficients
-resid1 = TVAR.regime{1}.resid;   % (nobs1 x nvar)
-resid2 = TVAR.regime{2}.resid;   % (nobs2 x nvar)
-nobs1  = TVAR.regime{1}.nobs;
-nobs2  = TVAR.regime{2}.nobs;
-Ft1    = TVAR.regime{1}.Ft;
-Ft2    = TVAR.regime{2}.Ft;
-
-% Check iv instrument
-if strcmp(ident,'iv') && isempty(TVAR.IV)
-    error('TVARirband: VARopt.ident=''iv'' requires TVAR.IV to be set');
+% GIRF options
+if isfield(VARopt, 'nreps_girf')
+    nreps_sim = VARopt.nreps_girf;
+else
+    nreps_sim = 50;
+end
+if isfield(VARopt, 'shock_scale')
+    shock_scale = VARopt.shock_scale;
+else
+    shock_scale = 1;
 end
 
-% Pre-allocate IRF storage: [nsteps x nvar x nvar x nregimes x ndraws]
-IR_store = nan(nsteps, nvar, nvar, nregimes, ndraws);
-MED      = zeros(nsteps, nvar, nvar, nregimes);
-BAR      = zeros(nsteps, nvar, nvar, nregimes);
-
-% Artificial data buffer
-y_art = zeros(nobs, nvar);
+delay        = TVAR.delay;
+thrvar_idx   = VARopt.thrvar_idx;
+tartransform = VARopt.tartransform;
 
 
-%% Bootstrap loop
-%--------------------------------------------------------------------------
-tt = 1;   % accepted draws
-ww = 1;   % display counter
+%% Dispatch by estimation method
+%==========================================================================
+if strcmp(TVAR.method, 'bayes')
+    [INF, SUP, MED, BAR] = bands_bayes(TVAR, VARopt, nsteps, ndraws, pctg, ...
+        nvar, nlag, nregimes, nreps_sim, shock_scale, delay, thrvar_idx, tartransform);
+else
+    [INF, SUP, MED, BAR] = bands_freq(TVAR, VARopt, nsteps, ndraws, pctg, ...
+        nvar, nlag, nregimes, nreps_sim, shock_scale, delay, thrvar_idx, tartransform);
+end
 
-while tt <= ndraws
+end
 
-    % Progress display
+
+%% ========================================================================
+%  BAYESIAN BANDS: GIRF at each posterior draw
+%  ========================================================================
+function [INF, SUP, MED, BAR] = bands_bayes(TVAR, VARopt, nsteps, ndraws, pctg, ...
+    nvar, nlag, nregimes, nreps_sim, shock_scale, delay, thrvar_idx, tartransform)
+
+fsize = TVAR.ndraws;
+shock_pos = 1:nvar;
+
+% Limit draws
+nuse = min(fsize, ndraws);
+
+% Pre-allocate: (nsteps x nvar x nshocks x nregimes x ndraws)
+IR_all = nan(nsteps, nvar, nvar, nregimes, nuse);
+
+disp('Computing Bayesian credible bands for TVAR GIRFs...');
+for jj = 1:nuse
+    if mod(jj, VARopt.mult) == 0
+        fprintf('  Draw %d / %d\n', jj, nuse);
+    end
+
+    % Extract posterior draw (already in Mumtaz ordering)
+    beta1 = TVAR.beta1_draws(jj,:)';
+    beta2 = TVAR.beta2_draws(jj,:)';
+    sigma1 = squeeze(TVAR.sigma1_draws(jj,:,:));
+    sigma2 = squeeze(TVAR.sigma2_draws(jj,:,:));
+    thresh = TVAR.thresh_draws(jj);
+
+    % Check stability
+    S1 = stability_tvar(beta1, nvar, nlag);
+    S2 = stability_tvar(beta2, nvar, nlag);
+    if S1 || S2
+        continue;
+    end
+
+    % Check positive definiteness
+    try
+        chol(sigma1);
+        chol(sigma2);
+    catch
+        continue;
+    end
+
+    % Compute GIRF at this posterior draw
+    try
+        GIRF = TVARgirf(beta1, sigma1, beta2, sigma2, thresh, ...
+            TVAR.Y, TVAR.Ystar, nvar, nlag, delay, nsteps, nreps_sim, ...
+            shock_pos, shock_scale, tartransform, thrvar_idx);
+
+        IR_all(:,:,:,1,jj) = GIRF.regime1;
+        IR_all(:,:,:,2,jj) = GIRF.regime2;
+    catch
+        continue;
+    end
+end
+disp('-- Done!');
+
+% Compute bands
+[INF, SUP, MED, BAR] = compute_bands(IR_all, pctg, nsteps, nvar, nregimes);
+
+end
+
+
+%% ========================================================================
+%  FREQUENTIST BANDS: bootstrap + GIRF at each draw
+%  ========================================================================
+function [INF, SUP, MED, BAR] = bands_freq(TVAR, VARopt, nsteps, ndraws, pctg, ...
+    nvar, nlag, nregimes, nreps_sim, shock_scale, delay, thrvar_idx, tartransform)
+
+const     = TVAR.const;
+method    = VARopt.method;
+ntotcoeff = TVAR.regime{1}.ntotcoeff;
+shock_pos = 1:nvar;
+
+% Stability threshold
+maxEig_pt = max(cellfun(@(r) r.maxEig, TVAR.regime));
+stab_thresh = max(1.05, maxEig_pt + 0.10);
+
+% Pre-allocate
+IR_all = nan(nsteps, nvar, nvar, nregimes, ndraws);
+
+disp('Computing frequentist bootstrap bands for TVAR GIRFs...');
+tt = 1;
+ww = 1;
+max_attempts = ndraws * 5;
+attempts = 0;
+
+while tt <= ndraws && attempts < max_attempts
+    attempts = attempts + 1;
+
     if tt == VARopt.mult * ww
-        disp(['TVARirband: ' num2str(tt) ' / ' num2str(ndraws) ' draws']);
+        disp(['  Loop ' num2str(tt) ' / ' num2str(ndraws) ' draws']);
         ww = ww + 1;
     end
 
-    %% STEP 1: draw residuals within each regime
-    if strcmp(method, 'bs')
-        u1 = resid1(ceil(nobs1 * rand(nobs1,1)), :);
-        u2 = resid2(ceil(nobs2 * rand(nobs2,1)), :);
+    all_stable = true;
+    beta1_boot = [];
+    sigma1_boot = [];
+    beta2_boot = [];
+    sigma2_boot = [];
 
-    elseif strcmp(method, 'wild')
-        rr1 = 1 - 2*(rand(nobs1,1) > 0.5);
-        rr2 = 1 - 2*(rand(nobs2,1) > 0.5);
-        u1  = resid1 .* (rr1 * ones(1,nvar));
-        u2  = resid2 .* (rr2 * ones(1,nvar));
+    for k = 1:nregimes
+        reg = TVAR.regime{k};
+        nobsk = reg.nobs;
+        residk = reg.resid;
 
-        % Wild bootstrap for instrument: apply same perturbation to IV rows
-        if strcmp(ident,'iv')
-            IV_full = TVAR.IV;
-            rr_full = nan(nobse,1);
-            rr_full(regime_idx==1) = rr1;
-            rr_full(regime_idx==2) = rr2;
-            % IV is indexed from row nlag+1:nobs in original space
-            rr_iv = rr_full;   % same length as Y rows
-            IV_boot = IV_full;
-            IV_boot(nlag+1:end, :) = IV_full(nlag+1:end,:) .* ...
-                (rr_iv * ones(1,size(IV_full,2)));
-        end
-    else
-        error(['TVARirband: unknown bootstrap method ''' method '''']);
-    end
-
-    % Reassemble into full-sample order (fixed-design: regime assignments unchanged)
-    u = zeros(nobse, nvar);
-    u(regime_idx==1, :) = u1;
-    u(regime_idx==2, :) = u2;
-
-
-    %% STEP 2: generate artificial data
-    % Seed first nlag rows from actual data
-    LAG = [];
-    for jj = 1:nlag
-        y_art(jj,:) = ENDO(jj,:);
-        LAG = [y_art(jj,:) LAG]; %#ok<AGROW>
-    end
-    T = (1:nobse)';
-    switch const
-        case 0; LAGplus = LAG;
-        case 1; LAGplus = [1 LAG];
-        case 2; LAGplus = [1 T(1) LAG];
-        case 3; LAGplus = [1 T(1) T(1).^2 LAG];
-    end
-    % Append exogenous if present (same as VARirband)
-    if ~isempty(EXOG) && TVAR.regime{1}.nvar_ex > 0
-        LAGplus = [LAGplus TVAR.X_EX(1,:)];
-    end
-
-    % Fixed-design: use Ft_k selected by the original regime_idx
-    for jj = nlag+1 : nobs
-        t_aligned = jj - nlag;  % row index in Y (1-based)
-        k_t = regime_idx(t_aligned);
-        if k_t == 1; Ft_t = Ft1; else; Ft_t = Ft2; end
-        for mm = 1:nvar
-            y_art(jj,mm) = LAGplus * Ft_t(:,mm) + u(t_aligned, mm);
-        end
-        if jj < nobs
-            LAG = [y_art(jj,:) LAG(1, 1:(nlag-1)*nvar)]; %#ok<AGROW>
-            tidx = jj - nlag + 1;
-            switch const
-                case 0; LAGplus = LAG;
-                case 1; LAGplus = [1 LAG];
-                case 2; LAGplus = [1 T(tidx) LAG];
-                case 3; LAGplus = [1 T(tidx) T(tidx).^2 LAG];
-            end
-            if ~isempty(EXOG) && TVAR.regime{1}.nvar_ex > 0
-                LAGplus = [LAGplus TVAR.X_EX(tidx,:)]; %#ok<AGROW>
-            end
-        end
-    end
-
-
-    %% STEP 3: re-estimate TVAR on artificial data
-    try
-        if ~isempty(EXOG)
-            TVAR_draw = TVARmodel(y_art, nlag, const, thrvar_idx, delay, [], EXOG, TVAR.regime{1}.nlag_ex);
+        % Resample residuals
+        if strcmp(method, 'wild')
+            rr = 1 - 2*(rand(nobsk,1) > 0.5);
+            u = residk .* (rr * ones(1, nvar));
         else
-            TVAR_draw = TVARmodel(y_art, nlag, const, thrvar_idx, delay);
+            u = residk(ceil(nobsk * rand(nobsk, 1)), :);
         end
-    catch
-        % Threshold estimation failed on this draw — skip
-        continue
-    end
 
-    % Both regimes must be stable
-    if TVAR_draw.regime{1}.maxEig >= 0.9999 || TVAR_draw.regime{2}.maxEig >= 0.9999
-        continue
-    end
+        % Generate artificial Y
+        Y_art = reg.X * reg.Ft + u;
 
-    % Attach instrument for iv identification
-    if strcmp(ident,'iv')
-        if strcmp(method,'wild')
-            TVAR_draw.IV = IV_boot;
+        % Re-estimate OLS
+        Ft_draw = (reg.X' * reg.X) \ (reg.X' * Y_art);
+        F_draw  = Ft_draw';
+        resid_draw = Y_art - reg.X * Ft_draw;
+        sigma_draw = (resid_draw' * resid_draw) / (nobsk - ntotcoeff);
+
+        % Companion stability check
+        Fcomp_draw = [F_draw(:, 1+const:nvar*nlag+const); ...
+                      eye(nvar*(nlag-1)), zeros(nvar*(nlag-1), nvar)];
+        maxEig_draw = max(abs(eig(Fcomp_draw)));
+
+        if maxEig_draw >= stab_thresh
+            all_stable = false;
+            break;
+        end
+
+        % Convert to Mumtaz ordering [lags|const]
+        beta_mumtaz = [Ft_draw(2:nvar*nlag+1, :); Ft_draw(1, :)];
+        if k == 1
+            beta1_boot = beta_mumtaz(:);
+            sigma1_boot = sigma_draw;
         else
-            TVAR_draw.IV = TVAR.IV;
+            beta2_boot = beta_mumtaz(:);
+            sigma2_boot = sigma_draw;
         end
     end
 
-
-    %% STEP 4: compute IRFs on this draw
-    try
-        [IR_draw, ~] = TVARir(TVAR_draw, VARopt);
-    catch
-        continue
+    if ~all_stable
+        continue;
     end
 
-    IR_store(:,:,:,:,tt) = IR_draw;
-    tt = tt + 1;
+    % Check positive definiteness
+    try
+        chol(sigma1_boot);
+        chol(sigma2_boot);
+    catch
+        continue;
+    end
+
+    % Compute GIRF at bootstrap draw
+    try
+        GIRF = TVARgirf(beta1_boot, sigma1_boot, beta2_boot, sigma2_boot, ...
+            TVAR.thresh, TVAR.Y, TVAR.Ystar, nvar, nlag, delay, nsteps, ...
+            nreps_sim, shock_pos, shock_scale, tartransform, thrvar_idx);
+
+        IR_all(:,:,:,1,tt) = GIRF.regime1;
+        IR_all(:,:,:,2,tt) = GIRF.regime2;
+        tt = tt + 1;
+    catch
+        continue;
+    end
 end
 
-disp('TVARirband: -- Done!');
-disp(' ');
+if tt - 1 < ndraws
+    warning('TVARirband: only %d of %d bootstrap draws were successful', tt-1, ndraws);
+    IR_all = IR_all(:,:,:,:,1:tt-1);
+end
+disp('-- Done!');
+
+% Compute bands
+[INF, SUP, MED, BAR] = compute_bands(IR_all, pctg, nsteps, nvar, nregimes);
+
+end
 
 
-%% Compute confidence bands
-%--------------------------------------------------------------------------
+%% ========================================================================
+%  HELPER: compute percentile bands from IR_all
+%  ========================================================================
+function [INF, SUP, MED, BAR] = compute_bands(IR_all, pctg, nsteps, nvar, nregimes)
+
 npctg = numel(pctg);
+draw_dim = 5;
+
+% Drop NaN/complex draws
+ndraws_actual = size(IR_all, draw_dim);
+valid = true(1, ndraws_actual);
+for jj = 1:ndraws_actual
+    slice = IR_all(:,:,:,:,jj);
+    if any(~isreal(slice(:))) || all(isnan(slice(:)))
+        valid(jj) = false;
+    end
+end
+IR_all = IR_all(:,:,:,:,valid);
+
 if npctg > 1
     INF = zeros(nsteps, nvar, nvar, nregimes, npctg);
     SUP = zeros(nsteps, nvar, nvar, nregimes, npctg);
-else
-    INF = zeros(nsteps, nvar, nvar, nregimes);
-    SUP = zeros(nsteps, nvar, nvar, nregimes);
-end
-
-for k = 1:nregimes
-    if npctg > 1
-        for pp = 1:npctg
-            INF(:,:,:,k,pp) = prctile(IR_store(:,:,:,k,:), (100-pctg(pp))/2, 5);
-            SUP(:,:,:,k,pp) = prctile(IR_store(:,:,:,k,:), 100-(100-pctg(pp))/2, 5);
-        end
-    else
-        INF(:,:,:,k) = prctile(IR_store(:,:,:,k,:), (100-pctg)/2, 5);
-        SUP(:,:,:,k) = prctile(IR_store(:,:,:,k,:), 100-(100-pctg)/2, 5);
+    for pp = 1:npctg
+        INF(:,:,:,:,pp) = prctile(IR_all, (100-pctg(pp))/2, draw_dim);
+        SUP(:,:,:,:,pp) = prctile(IR_all, 100-(100-pctg(pp))/2, draw_dim);
     end
-    MED(:,:,:,k) = prctile(IR_store(:,:,:,k,:), 50, 5);
-    BAR(:,:,:,k) = mean(IR_store(:,:,:,k,:), 5);
+else
+    INF = prctile(IR_all, (100-pctg)/2, draw_dim);
+    SUP = prctile(IR_all, 100-(100-pctg)/2, draw_dim);
+end
+MED = prctile(IR_all, 50, draw_dim);
+BAR = nanmean(IR_all, draw_dim);
+
 end

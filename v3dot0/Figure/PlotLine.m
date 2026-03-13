@@ -164,7 +164,8 @@ for mm=1:nyy
         % Save
         if opt.quality
             set(gcf, 'Color', 'w');
-            export_fig(aux_savename,'-pdf','-png','-painters')
+            exportgraphics(gcf,[aux_savename '.pdf'],'ContentType','vector')
+            exportgraphics(gcf,[aux_savename '.png'],'Resolution',300)
         else
             print('-dpng','-r100',aux_savename)
             print('-dpdf','-r100',aux_savename)

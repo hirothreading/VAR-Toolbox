@@ -115,7 +115,7 @@ legend('IV')
 
 %% SAVE
 %==========================================================================
-SaveFigure('GK_Replication',1);
+set(gcf,'Color','w'); exportgraphics(gcf,'GK_Replication.pdf','ContentType','vector');
 
 
 

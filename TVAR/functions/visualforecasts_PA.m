@@ -1,0 +1,326 @@
+clear
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% SETTINGS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+strFolder = 'I:\FCI';
+
+% addpath(strcat(strFolder,'functions'));
+
+% Directories with data and forecasts (one for each model)
+dirname         = strcat(strFolder,filesep); 
+fdirnametar     = strcat(strFolder,filesep,'TAR',filesep);
+fdirnamevar     = strcat(strFolder,filesep,'benchmark',filesep);
+fdirnamebasic   = strcat(strFolder, filesep,'basic',filesep); 
+fdirnametvtp    = strcat(strFolder, filesep,'tvtp',filesep); 
+
+
+% Number of the first/last data file and number of retained draws:
+minfile = 0;
+maxfile = 354;
+S       = 5000;
+
+% Number of observations used in initial estimation, horizons, density
+% percentiles to be saved: 
+T0       = 121 ;
+horizons = [1 6 12];
+percentiles = [10 25 50 75 90];
+% NB must be the SAME FOR ALL MODELS
+
+% For cumulative h-period ahead forecasts, set 'cumulative' to true and
+% choose horizon hh:
+cumulative = true;
+hh = 6;
+
+% Load data:
+tempname = strcat(dirname,'data',num2str(maxfile),'.mat');
+load(tempname);
+datavar = dataout;
+datatar = dataout;
+databasic = dataout(:,1:3);
+datatvtp = dataout(:,1:3);
+
+
+% NB the data can DIFFER ACROSS MODELS. Eg datatar could be set by:
+% tempname = (...);
+% load(tempname);
+% datatar = dataout;
+
+% Define labels:
+models    = {'VAR ', 'TAR', 'BASIC'};
+vnamesvar = {'ip ', 'r ', 'cpi ', 'fci '};
+vnamestar = vnamesvar ;
+vnamesbasic = {'ip ', 'r ', 'cpi '};
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Initialise outputs
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+T = rows(datavar);
+N = cols(datavar);
+T2 = maxfile + 1 - max(horizons);
+% T2 is the # of usable forecasts. If minfile=0 we need to add +1, because
+% we have [forecast0 .. forecastK] = (K+1) forecasts.
+
+
+dates=1983+(2/12):1/12:2009+(1/12);
+[xyz tesmp]=xlsread(strcat(strFolder,filesep, 'dates.xls')); % PA
+dates=datestr(tesmp,2);
+
+set(gca,'nextplot','replacechildren');
+
+%%  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+mm=1;
+for file = 287 : 311  %2007-01-01 to 2009-01-01
+
+   
+    % Load draws
+    %----------------------------------------------------------------------
+	fnameTAR=strcat(fdirnametar,'forecast',num2str(file),'.mat');
+    fnameVAR=strcat(fdirnamevar,'forecast',num2str(file),'.mat');
+    fnamebasic=strcat(fdirnamebasic,'forecast',num2str(file),'.mat');
+    fnametvtp=strcat(fdirnametvtp,'forecast',num2str(file),'.mat');
+
+    load(fnameTAR);
+    ftar = fsave;
+
+    load(fnameVAR);
+    fvar = fsave;
+    
+    load(fnamebasic);
+    fbasic = fsave;
+    
+    load(fnametvtp);
+    ftvtp = fsave;
+        
+	% Split data into estimation sample and observations for fc/density evaluation
+    %----------------------------------------------------------------------
+    samplevar = datavar(1:T0+file, :);
+    sampletar = datatar(1:T0+file, :);
+    samplebasic = databasic(1:T0+file, :);
+	sampletvtp = datatvtp(1:T0+file, :);
+    
+    obsvar = datavar(T0+file+1 : T0+file+max(horizons), :) ;
+    obstar = datatar(T0+file+1 : T0+file+max(horizons), :) ; 
+    obsbasic = databasic(T0+file+1 : T0+file+max(horizons), :) ; 
+	obstvtp = datatvtp(T0+file+1 : T0+file+max(horizons), :) ; 
+    
+	% PA: Get CUMULATIVE ('c') forecasts and data for horizon hh 
+    % -----------------------------------------------------------
+    ftarc=[]; fvarc=[]; fbasicc=[]; ftvtpc=[];
+	obsvarc=[]; obstarc=[]; obsbasicc=[]; obstvtpc=[]; 
+    
+    for tt = 1 : max(horizons)-hh+1
+        ftarc   = [ftarc sum(ftar(:,tt:tt+hh-1,:), 2)];
+        fvarc	= [fvarc sum(fvar(:,tt:tt+hh-1,:), 2)];
+        fbasicc = [fbasicc sum(fbasic(:,tt:tt+hh-1,:), 2)];
+        ftvtpc  = [ftvtpc sum(ftvtp(:,tt:tt+hh-1,:), 2)];
+
+        obsvarc =  [obsvarc;    sum(obsvar(tt:tt+hh-1, :), 1)];
+        obstarc =  [obstarc;    sum(obsvar(tt:tt+hh-1, :), 1)];
+        obsbasicc= [obsbasicc;  sum(obsbasic(tt:tt+hh-1, :), 1)];
+        obstvtpc = [obstvtpc;   sum(obstvtp(tt:tt+hh-1, :), 1)];        
+    end
+    
+    % Un-do annualisation for Y and PI:
+    ftarc(:,:,[1 3])  = ftarc(:,:,[1 3])/12;
+    fvarc(:,:,[1 3])  = fvarc(:,:,[1 3])/12;
+    fbasicc(:,:,[1 3])= fbasicc(:,:,[1 3])/12;
+    ftvtpc(:,:,[1 3]) = ftvtpc(:,:,[1 3])/12;
+
+    obsvarc =  obsvarc/12;
+    obstarc =  obstarc/12;
+    obsbasicc= obsbasicc/12;
+    obstvtpc = obstvtpc/12;    
+    
+    % figure(file)    
+    
+    % fig=figure('Name',char(dates(file)),'NumberTitle','off');
+    fig=figure;
+
+    if cumulative == false
+        %% MONTH BY MONTH FORECASTS, (Y, PI, R)
+
+        v=1; % ---------------------------- IP
+
+        subplot(3,4,1)
+        plotfan(fbasic(:,:,v)')
+        hold on
+        plot(obsbasic(:,v),'b');
+        axis tight
+        title('VAR^§');
+        ylabel('y')
+        temp=prctile(fvar(:,:,v),[ 5 95],1);
+        text(-0.1,max(max(temp))+1,(dates(file,:)),'FontSize',14)
+        
+        subplot(3,4,2)
+        plotfan(fvar(:,:,v)')
+        hold on
+        plot(obsvar(:,v),'b');
+        axis tight
+        title('VAR');
+
+        subplot(3,4,3)
+        plotfan(ftar(:,:,v)')
+        hold on
+        plot(obstar(:,v),'b');
+        axis tight
+        title('TAR');
+
+        subplot(3,4,4)
+        plotfan(ftvtp(:,:,v)')
+        hold on
+        plot(obstvtp(:,v),'b');
+        axis tight
+        title('MSVAR');
+
+        v=2; % ---------------------------- R 
+        subplot(3,4,5)
+        plotfan(fbasic(:,:,v)')
+        hold on
+        plot(obsbasic(:,v),'b');
+        axis tight
+        title('VAR^§');
+        ylabel('r')
+        text(min(min(fvar(:,:,1)))-0.01,max(max(fvar(:,:,1)))+0.01,char(dates(file)))
+
+        subplot(3,4,6)
+        plotfan(fvar(:,:,v)')
+        hold on
+        plot(obsvar(:,v),'b');
+        axis tight
+        title('VAR');
+
+        subplot(3,4,7)
+        plotfan(ftar(:,:,v)')
+        hold on
+        plot(obstar(:,v),'b');
+        axis tight
+        title('TAR');
+
+        subplot(3,4,8)
+        plotfan(ftvtp(:,:,v)')
+        hold on
+        plot(obstvtp(:,v),'b');
+        axis tight
+        title('MSVAR');
+
+        v=3; % ---------------------------- PI
+        subplot(3,4,9)
+        plotfan(fbasic(:,:,v)')
+        hold on
+        plot(obsbasic(:,v),'b');
+        axis tight
+        title('VAR^§');
+        ylabel('\pi')
+        text(min(min(fvar(:,:,1)))-0.01,max(max(fvar(:,:,1)))+0.01,char(dates(file)))
+
+        subplot(3,4,10)
+        plotfan(fvar(:,:,v)')
+        hold on
+        plot(obsvar(:,v),'b');
+        axis tight
+        title('VAR');
+
+        subplot(3,4,11)
+        plotfan(ftar(:,:,v)')
+        hold on
+        plot(obstar(:,v),'b');
+        axis tight
+        title('TAR');
+
+        subplot(3,4,12)
+        plotfan(ftvtp(:,:,v)')
+        hold on
+        plot(obstvtp(:,v),'b');
+        axis tight
+        title('MSVAR');
+
+    elseif cumulative == true
+        %% CUMULATIVE FORECASTS, (Y, PI)
+
+        v=1; % ---------------------------- IP
+        subplot(2,4,1)
+        plotfan(fbasicc(:,:,v)')
+        hold on
+        plot(obsbasicc(:,v),'b');
+        axis tight
+        title('VAR^§');
+        ylabel('y')
+        temp=prctile(fvarc(:,:,v),[ 5 95],1);
+        text(-0.01,max(max(temp))+1,(dates(file,:)),'FontSize',14)
+
+        subplot(2,4,2)
+        plotfan(fvarc(:,:,v)')
+        hold on
+        plot(obsvarc(:,v),'b');
+        axis tight
+        title('VAR');
+        
+        subplot(2,4,3)
+        plotfan(ftarc(:,:,v)')
+        hold on
+        plot(obstarc(:,v),'b');
+        axis tight
+        title('TAR');
+
+        subplot(2,4,4)
+        plotfan(ftvtpc(:,:,v)')
+        hold on
+        plot(obstvtpc(:,v),'b');
+        axis tight
+        title('MSVAR');
+
+        v=3; % ---------------------------- PI
+        subplot(2,4,5)
+        plotfan(fbasicc(:,:,v)')
+        hold on
+        plot(obsbasicc(:,v),'b');
+        axis tight
+        title('VAR^§');
+        ylabel('\pi')
+        text(min(min(fvar(:,:,1)))-0.01,max(max(fvar(:,:,1)))+0.01,char(dates(file)))
+
+        subplot(2,4,6)
+        plotfan(fvarc(:,:,v)')
+        hold on
+        plot(obsvarc(:,v),'b');
+        axis tight
+        title('VAR');
+        
+        subplot(2,4,7)
+        plotfan(ftarc(:,:,v)')
+        hold on
+        plot(obstarc(:,v),'b');
+        axis tight
+        title('TAR');
+
+        subplot(2,4,8)
+        plotfan(ftvtpc(:,:,v)')
+        hold on
+        plot(obstvtpc(:,v),'b');
+        axis tight
+        title('MSVAR');
+        
+    end
+    
+    
+    fmat(mm)=getframe(fig);
+    mm=mm+1;    
+	disp(file);
+end
+
+movie2avi(fmat, 'forecasts.avi', 'compression', 'None','fps',2);
+
+close all
+[h, w, p] = size(fmat(1).cdata); % use 1st frame to get dimensions
+hf = figure; 
+% resize figure based on frame's w x h, and place at (150, 150)
+set(hf, 'position', [150 150 w h]);
+axis off
+movie(hf,fmat);
+
+
+

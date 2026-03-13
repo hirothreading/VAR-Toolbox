@@ -1,0 +1,19 @@
+% Messin' with the PCRs
+
+% Load output file with VAR0, VAR, TAR, TVTP structures:
+% load 'D:\My_Documents\Density_forecasts\Code\TVAR\files\output_13_11_26\output_merge.mat' 
+
+for ii=1:length(percentiles)
+    
+    disp(sprintf('percentile %s', num2str(percentiles(ii))))
+    disp('')
+
+    tempData = num2str(VAR.pcr(:,:,ii), '% 6.2f');
+    
+    disp(tempData)
+
+    
+end
+
+
+delete temp*
